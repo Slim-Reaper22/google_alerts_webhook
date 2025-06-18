@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import requests
 from urllib.parse import unquote
 import json
+import time
 
 # Optional: Anthropic for AI summaries
 try:
@@ -376,39 +377,39 @@ def send_to_smartsuite(alert_data):
             "Content-Type": "application/json"
         }
         
-        # Format date
+        # Format date - SmartSuite expects ISO format string for date fields
         try:
             if 'date' in alert_data and alert_data['date']:
-                date_str = alert_data['date']
-                # Try to parse and reformat
-                formatted_date = {"date": date_str, "include_time": True}
+                # Parse the date and convert to ISO format
+                from dateutil import parser
+                date_obj = parser.parse(alert_data['date'])
+                formatted_date = date_obj.isoformat()
             else:
-                formatted_date = {"date": datetime.now().isoformat(), "include_time": True}
+                formatted_date = datetime.now().isoformat()
         except:
-            formatted_date = {"date": datetime.now().isoformat(), "include_time": True}
+            formatted_date = datetime.now().isoformat()
         
-        # Build payload with CORRECT FIELD IDs
+        # Create unique title by adding timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_title = (alert_data.get('company') or alert_data.get('headline', 'New Lead'))[:80]
+        unique_title = f"{base_title} - {timestamp}"
+        
+        # Build payload with CORRECT FIELD IDs and formats
         payload = {
-            "title": (alert_data.get('company') or alert_data.get('headline', 'New Lead'))[:100],
+            "title": unique_title,  # Made unique with timestamp
             "sc373e6626": alert_data.get('company', ''),  # company
-            "s46434c9b6": {  # address (addressfield type might need special format)
-                "location": alert_data.get('address', ''),
-                "street_address": alert_data.get('address', '')
-            },
+            "s46434c9b6": alert_data.get('address', ''),  # address - just send as string
             "s492934214": alert_data.get('lead_summary', '')[:500],  # lead_summary
             "sa8ca8dbcb": alert_data.get('estimated_jobs', ''),  # estimated_new_jobs
-            "s8e6e9fe79": {  # article_url (linkfield)
-                "url": alert_data.get('url', ''),
-                "label": "Read Article"
-            },
-            "s8d5616e3e": {"from_date": formatted_date},  # date
+            "s8e6e9fe79": alert_data.get('url', ''),  # article_url - just the URL string
+            "s8d5616e3e": formatted_date,  # date - just the ISO date string
             "s6e74e1ce5": alert_data.get('source', '')[:100]  # source
         }
         
         # Clean payload - remove empty values
-        payload = {k: v for k, v in payload.items() if v}
+        payload = {k: v for k, v in payload.items() if v and v != ''}
         
-        print(f"Sending to SmartSuite: {payload.get('title', 'Unknown')}")
+        print(f"Sending to SmartSuite: {unique_title}")
         
         response = requests.post(url, headers=headers, json=payload)
         
@@ -417,6 +418,18 @@ def send_to_smartsuite(alert_data):
         else:
             error_msg = f"SmartSuite error {response.status_code}: {response.text[:200]}"
             print(error_msg)
+            
+            # If it's a duplicate title error, add more specific timestamp
+            if "This field must be unique" in response.text and "title" in response.text:
+                # Try again with milliseconds
+                import time
+                unique_title = f"{base_title} - {int(time.time()*1000)}"
+                payload['title'] = unique_title
+                
+                response = requests.post(url, headers=headers, json=payload)
+                if response.status_code in [200, 201]:
+                    return True, "Successfully sent to SmartSuite (with unique timestamp)"
+                
             return False, error_msg
             
     except Exception as e:
