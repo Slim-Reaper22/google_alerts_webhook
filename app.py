@@ -173,14 +173,22 @@ def parse_google_alert_email(html_content, subject):
                 actual_url = extract_google_url(href)
                 
                 if actual_url:
-                    # Get clean headline text
-                    headline_text = link.get_text(strip=True)
+                    # Get the full text content from the link
+                    # This handles cases where text might be in nested elements
+                    headline_parts = []
+                    for text in link.stripped_strings:
+                        headline_parts.append(text)
                     
-                    # Clean up headline - remove extra spaces
-                    headline_text = re.sub(r'\s+', ' ', headline_text)
+                    # Join with spaces and clean up
+                    headline_text = ' '.join(headline_parts)
+                    
+                    # Additional cleanup - ensure spaces between words
+                    headline_text = re.sub(r'([a-z])([A-Z])', r'\1 \2', headline_text)  # Add space between camelCase
+                    headline_text = re.sub(r'(\w)([A-Z][a-z])', r'\1 \2', headline_text)  # Add space before capital letters
+                    headline_text = re.sub(r'\s+', ' ', headline_text)  # Normalize multiple spaces
                     
                     alert = {
-                        'headline': headline_text,
+                        'headline': headline_text.strip(),
                         'url': actual_url,
                         'source': '',
                         'company': '',
@@ -225,11 +233,20 @@ def parse_google_alert_email(html_content, subject):
                 actual_url = extract_google_url(href)
                 
                 if actual_url:
-                    headline_text = link.get_text(strip=True)
+                    # Get text with proper spacing
+                    headline_parts = []
+                    for text in link.stripped_strings:
+                        headline_parts.append(text)
+                    
+                    headline_text = ' '.join(headline_parts)
+                    
+                    # Add spaces between camelCase
+                    headline_text = re.sub(r'([a-z])([A-Z])', r'\1 \2', headline_text)
+                    headline_text = re.sub(r'(\w)([A-Z][a-z])', r'\1 \2', headline_text)
                     headline_text = re.sub(r'\s+', ' ', headline_text)
                     
                     alert = {
-                        'headline': headline_text,
+                        'headline': headline_text.strip(),
                         'url': actual_url,
                         'source': '',
                         'company': '',
@@ -377,12 +394,12 @@ def extract_location(text):
     
     # Location patterns - more specific
     patterns = [
-        # City, State with optional "in"
-        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
+        # City, State (with comma)
+        rf'([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
+        # "in City, State"
+        rf'\bin\s+([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
         # City State (no comma)
-        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?)\s+({state_pattern})\b',
-        # With facility/plant/etc
-        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?),?\s*({state_pattern})\s+(?:facility|plant|warehouse|center|location)',
+        rf'([A-Z][a-zA-Z\s]+?)\s+({state_pattern})(?:\s+|,|$)',
     ]
     
     for pattern in patterns:
@@ -391,16 +408,16 @@ def extract_location(text):
             city = match.group(1).strip()
             state = match.group(2).strip()
             
-            # Clean up city name - remove extra words
-            city = re.sub(r'\b(?:in|at|to|near|the)\b', '', city, flags=re.IGNORECASE).strip()
-            city = re.sub(r'\s+', ' ', city)  # Normalize spaces
+            # Clean up city name - remove common words
+            city = re.sub(r'\b(?:Company|Expands|Announces|Million|Manufacturing|Expansion|Opens|Develops)\b', '', city, flags=re.IGNORECASE)
+            city = re.sub(r'\s+', ' ', city).strip()
             
             # Normalize state to full name
             if state.upper() in states:
                 state = states[state.upper()]
             
             # Validate city name
-            if city and len(city) > 2:
+            if city and len(city) > 2 and not city.replace(' ', '').isdigit():
                 return f"{city}, {state}"
     
     return ""
@@ -475,6 +492,11 @@ def create_manual_summary(headline, company, location, content):
 def send_to_smartsuite(alert_data):
     """Send record to SmartSuite"""
     try:
+        # Check if we have API key
+        if not SMARTSUITE_API_KEY:
+            print("ERROR: No SmartSuite API key found in environment variables!")
+            return False, "Missing SmartSuite API key"
+            
         url = f"https://app.smartsuite.com/api/v1/applications/{SMARTSUITE_TABLE_ID}/records/"
         
         headers = {
@@ -500,11 +522,18 @@ def send_to_smartsuite(alert_data):
         base_title = (alert_data.get('company') or alert_data.get('headline', 'New Lead'))[:80]
         unique_title = f"{base_title} - {timestamp}"
         
+        # For address field, only send if it's a proper city, state format
+        address_value = ""
+        if alert_data.get('address') and ',' in alert_data.get('address', ''):
+            # Check if it looks like a valid address
+            parts = alert_data['address'].split(',')
+            if len(parts) == 2 and len(parts[0].strip()) > 2:
+                address_value = alert_data['address']
+        
         # Build payload with CORRECT FIELD IDs and formats
         payload = {
             "title": unique_title,  # Made unique with timestamp
             "sc373e6626": alert_data.get('company', ''),  # company
-            "s46434c9b6": alert_data.get('address', ''),  # address - just send as string
             "s492934214": alert_data.get('lead_summary', '')[:500],  # lead_summary
             "sa8ca8dbcb": alert_data.get('estimated_jobs', ''),  # estimated_new_jobs
             "s8e6e9fe79": alert_data.get('url', ''),  # article_url - just the URL string
@@ -512,10 +541,15 @@ def send_to_smartsuite(alert_data):
             "s6e74e1ce5": alert_data.get('source', '')[:100]  # source
         }
         
+        # Only add address if it's valid
+        if address_value:
+            payload["s46434c9b6"] = address_value
+        
         # Clean payload - remove empty values
         payload = {k: v for k, v in payload.items() if v and v != ''}
         
         print(f"Sending to SmartSuite: {unique_title}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         
         response = requests.post(url, headers=headers, json=payload)
         
