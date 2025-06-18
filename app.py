@@ -19,7 +19,7 @@ except:
 
 app = Flask(__name__)
 
-# Configuration
+# Configuration - Now using environment variables
 SMARTSUITE_API_KEY = os.environ.get('SMARTSUITE_API_KEY')
 SMARTSUITE_WORKSPACE = os.environ.get('SMARTSUITE_WORKSPACE', 'sxs77u60')
 SMARTSUITE_TABLE_ID = os.environ.get('SMARTSUITE_TABLE_ID', '68517b0036a5ddf3941ea848')
@@ -387,19 +387,22 @@ def send_to_smartsuite(alert_data):
         except:
             formatted_date = {"date": datetime.now().isoformat(), "include_time": True}
         
-        # Build payload
+        # Build payload with CORRECT FIELD IDs
         payload = {
             "title": (alert_data.get('company') or alert_data.get('headline', 'New Lead'))[:100],
-            "company": alert_data.get('company', ''),
-            "address": alert_data.get('address', ''),
-            "lead_summary": alert_data.get('lead_summary', '')[:500],
-            "estimated_new_jobs": alert_data.get('estimated_jobs', ''),
-            "article_url": {
+            "sc373e6626": alert_data.get('company', ''),  # company
+            "s46434c9b6": {  # address (addressfield type might need special format)
+                "location": alert_data.get('address', ''),
+                "street_address": alert_data.get('address', '')
+            },
+            "s492934214": alert_data.get('lead_summary', '')[:500],  # lead_summary
+            "sa8ca8dbcb": alert_data.get('estimated_jobs', ''),  # estimated_new_jobs
+            "s8e6e9fe79": {  # article_url (linkfield)
                 "url": alert_data.get('url', ''),
                 "label": "Read Article"
             },
-            "date": {"from_date": formatted_date},
-            "source": alert_data.get('source', '')[:100]
+            "s8d5616e3e": {"from_date": formatted_date},  # date
+            "s6e74e1ce5": alert_data.get('source', '')[:100]  # source
         }
         
         # Clean payload - remove empty values
