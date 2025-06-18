@@ -20,9 +20,9 @@ except:
 app = Flask(__name__)
 
 # Configuration
-SMARTSUITE_API_KEY = 'c5f0367be5ffdc0f0ff804d8bfc1647b3d9abe38'
-SMARTSUITE_WORKSPACE = 'sxs77u60'
-SMARTSUITE_TABLE_ID = '68517b0036a5ddf3941ea848'
+SMARTSUITE_API_KEY = os.environ.get('SMARTSUITE_API_KEY')
+SMARTSUITE_WORKSPACE = os.environ.get('SMARTSUITE_WORKSPACE', 'sxs77u60')
+SMARTSUITE_TABLE_ID = os.environ.get('SMARTSUITE_TABLE_ID', '68517b0036a5ddf3941ea848')
 
 @app.route('/')
 def home():

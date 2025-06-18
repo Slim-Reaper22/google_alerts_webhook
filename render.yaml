@@ -7,3 +7,9 @@ services:
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: SMARTSUITE_API_KEY
+        sync: false
+      - key: SMARTSUITE_WORKSPACE
+        value: sxs77u60
+      - key: SMARTSUITE_TABLE_ID
+        value: 68517b0036a5ddf3941ea848
