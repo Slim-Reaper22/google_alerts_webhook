@@ -59,11 +59,17 @@ def process_google_alert():
         # Process each alert
         results = []
         for i, alert in enumerate(alerts):
+            print(f"\n{'='*60}")
             print(f"Processing alert {i+1}/{len(alerts)}: {alert['headline'][:50]}...")
+            print(f"URL: {alert['url']}")
             
             # Fetch article content if URL exists
             if alert['url']:
+                print(f"Fetching article content from: {alert['url']}")
                 article_data = fetch_article_content(alert['url'])
+                
+                print(f"Article fetch success: {article_data['success']}")
+                print(f"Content length: {len(article_data['content'])}")
                 
                 if article_data['content']:
                     # Extract information from article
@@ -73,13 +79,19 @@ def process_google_alert():
                     alert['address'] = extract_location(full_text)
                     alert['estimated_jobs'] = extract_job_numbers(full_text)
                     
+                    print(f"Extracted company: {alert['company']}")
+                    print(f"Extracted address: {alert['address']}")
+                    print(f"Extracted jobs: {alert['estimated_jobs']}")
+                    
                     # Generate AI summary if available
                     if anthropic_client:
+                        print("Generating AI summary...")
                         alert['lead_summary'] = generate_ai_summary(
                             article_data['content'], 
                             alert['headline']
                         )
                     else:
+                        print("No Anthropic client - creating manual summary")
                         # Create manual summary
                         alert['lead_summary'] = create_manual_summary(
                             alert['headline'],
@@ -88,9 +100,22 @@ def process_google_alert():
                             article_data['content']
                         )
                 else:
+                    print("No article content - using headline as summary")
                     alert['lead_summary'] = alert['headline']
+                    # Try to extract from just headline
+                    alert['company'] = extract_company_name(alert['headline'])
+                    alert['address'] = extract_location(alert['headline'])
+            else:
+                print("No URL provided")
+                alert['lead_summary'] = alert['headline']
             
             alert['date'] = email_date
+            
+            print(f"Final alert data:")
+            print(f"  Company: {alert['company']}")
+            print(f"  Address: {alert['address']}")
+            print(f"  Jobs: {alert['estimated_jobs']}")
+            print(f"  Summary: {alert['lead_summary'][:100]}...")
             
             # Send to SmartSuite
             success, message = send_to_smartsuite(alert)
@@ -112,58 +137,117 @@ def process_google_alert():
         
     except Exception as e:
         print(f"Error processing webhook: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'status': 'error',
             'message': str(e)
         }), 500
 
 def parse_google_alert_email(html_content, subject):
-    """Parse Google Alert email HTML"""
+    """Parse Google Alert email HTML - improved version"""
     alerts = []
     
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Find all links that look like article links
-        all_links = soup.find_all('a', href=True)
+        # Debug: Save HTML for inspection
+        print("Parsing Google Alert email...")
         
-        for link in all_links:
-            href = link.get('href', '')
-            
-            # Skip Google's own links
-            if any(skip in href for skip in ['google.com/alerts', 'mailto:', '#']):
-                continue
-            
-            # Extract actual URL from Google redirect
-            actual_url = extract_google_url(href)
-            
-            if actual_url:
-                alert = {
-                    'headline': link.get_text(strip=True),
-                    'url': actual_url,
-                    'source': '',
-                    'company': '',
-                    'address': '',
-                    'lead_summary': '',
-                    'estimated_jobs': ''
-                }
+        # Find all table rows that contain alerts
+        # Google Alerts often uses tables
+        for table in soup.find_all('table'):
+            for row in table.find_all('tr'):
+                # Look for links in the row
+                link = row.find('a', href=True)
+                if not link:
+                    continue
                 
-                # Try to find source (usually in green text near the link)
-                next_element = link.find_next_sibling() or link.parent.find_next_sibling()
-                if next_element:
-                    # Look for green colored text
-                    source_elem = next_element.find('font', color='#006621') or \
-                                 next_element.find(style=lambda x: x and 'color' in x and ('006621' in x or 'green' in x))
-                    if source_elem:
-                        alert['source'] = source_elem.get_text(strip=True)
+                href = link.get('href', '')
                 
-                # Only add if we have a headline
-                if alert['headline'] and len(alert['headline']) > 10:
-                    alerts.append(alert)
+                # Skip Google's own links
+                if any(skip in href for skip in ['google.com/alerts', 'mailto:', '#', 'support.google']):
+                    continue
+                
+                # Extract actual URL from Google redirect
+                actual_url = extract_google_url(href)
+                
+                if actual_url:
+                    # Get clean headline text
+                    headline_text = link.get_text(strip=True)
+                    
+                    # Clean up headline - remove extra spaces
+                    headline_text = re.sub(r'\s+', ' ', headline_text)
+                    
+                    alert = {
+                        'headline': headline_text,
+                        'url': actual_url,
+                        'source': '',
+                        'company': '',
+                        'address': '',
+                        'lead_summary': '',
+                        'estimated_jobs': ''
+                    }
+                    
+                    # Try to find source - look in the same row
+                    # Google often puts source in green text
+                    for elem in row.find_all(['font', 'span']):
+                        if elem.get('color') == '#006621' or (elem.get('style') and '006621' in elem.get('style', '')):
+                            alert['source'] = elem.get_text(strip=True)
+                            break
+                    
+                    # Also check next row for source
+                    if not alert['source']:
+                        next_row = row.find_next_sibling('tr')
+                        if next_row:
+                            source_elem = next_row.find('font', color='#006621')
+                            if source_elem:
+                                alert['source'] = source_elem.get_text(strip=True)
+                    
+                    # Only add if we have a meaningful headline
+                    if alert['headline'] and len(alert['headline']) > 10:
+                        alerts.append(alert)
+                        print(f"Found alert: {alert['headline'][:50]}...")
+        
+        # If no alerts found in tables, try direct link search
+        if not alerts:
+            print("No alerts in tables, trying direct link search...")
+            all_links = soup.find_all('a', href=True)
+            
+            for link in all_links:
+                href = link.get('href', '')
+                
+                # Skip Google's own links
+                if any(skip in href for skip in ['google.com/alerts', 'mailto:', '#']):
+                    continue
+                
+                # Extract actual URL from Google redirect
+                actual_url = extract_google_url(href)
+                
+                if actual_url:
+                    headline_text = link.get_text(strip=True)
+                    headline_text = re.sub(r'\s+', ' ', headline_text)
+                    
+                    alert = {
+                        'headline': headline_text,
+                        'url': actual_url,
+                        'source': '',
+                        'company': '',
+                        'address': '',
+                        'lead_summary': '',
+                        'estimated_jobs': ''
+                    }
+                    
+                    # Only add if we have a headline
+                    if alert['headline'] and len(alert['headline']) > 10:
+                        alerts.append(alert)
         
     except Exception as e:
         print(f"Error parsing email: {e}")
+        import traceback
+        traceback.print_exc()
     
+    print(f"Total alerts found: {len(alerts)}")
     return alerts[:10]  # Limit to 10 alerts to avoid timeout
 
 def extract_google_url(url):
@@ -186,7 +270,7 @@ def fetch_article_content(url):
     
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
         
         response = requests.get(url, headers=headers, timeout=10)
@@ -237,28 +321,39 @@ def fetch_article_content(url):
 
 def extract_company_name(text):
     """Extract company name using various patterns"""
+    # Clean up the text first
+    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+    
     patterns = [
-        # Company with suffix
-        r'([A-Z][A-Za-z0-9\s&\-\.\']+(?:Inc|LLC|Corp|Corporation|Company|Co|Ltd|Limited|Group|Holdings|Industries|Manufacturing|Logistics|Properties|Partners|Enterprises|Systems|Technologies|Solutions)\.?)',
-        # Company doing action
-        r'([A-Z][A-Za-z0-9\s&\-\.\']+)\s+(?:announced|announces|plans|planning|expands|expanding|opens|opening|launches|launching|develops|developing|acquires|acquiring|invests|investing)',
+        # Company with suffix - more specific
+        r'([A-Z][A-Za-z0-9\s&\-\.\']+?)\s*(?:Inc\.?|LLC|Corp\.?|Corporation|Company|Co\.?|Ltd\.?|Limited|Group|Holdings|Industries|Manufacturing|Logistics|Properties|Partners|Enterprises|Systems|Technologies|Solutions)\b',
+        # Company doing action - capture company name before action verb
+        r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:announced|announces|plans|planning|expands|expanding|opens|opening|launches|launching|develops|developing|acquires|acquiring|invests|investing|to\s+build|will\s+build)',
+        # Company at start of headline
+        r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:Announces|Expands|Opens|Invests|Develops)',
         # Quoted company
-        r'["\']([A-Z][A-Za-z0-9\s&\-\.\']+)["\']',
+        r'["\']([A-Z][A-Za-z0-9\s&\-\.\']+?)["\']',
     ]
     
-    companies = []
     for pattern in patterns:
-        matches = re.findall(pattern, text[:1000])  # Check first 1000 chars
-        companies.extend(matches)
+        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        if match:
+            company = match.group(1).strip()
+            # Clean up company name
+            company = re.sub(r'\s+', ' ', company)  # Normalize spaces
+            company = company.rstrip('.')  # Remove trailing periods
+            
+            # Don't return if it's too short or too long
+            if 3 < len(company) < 50:
+                return company
     
-    # Clean and filter
-    companies = [c.strip() for c in companies if len(c.strip()) > 3 and len(c.strip()) < 50]
-    
-    # Return most likely company (first one found)
-    return companies[0] if companies else ""
+    return ""
 
 def extract_location(text):
     """Extract city and state location"""
+    # Clean up the text first
+    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+    
     # US States mapping
     states = {
         'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
@@ -278,13 +373,16 @@ def extract_location(text):
     
     # Build pattern with all states
     all_states = list(states.keys()) + list(states.values())
-    state_pattern = '|'.join(all_states)
+    state_pattern = '|'.join(re.escape(state) for state in all_states)
     
-    # Location patterns
+    # Location patterns - more specific
     patterns = [
-        rf'(?:in|at|to|near)\s+([A-Z][a-zA-Z\s]+?),\s*({state_pattern})',
-        rf'([A-Z][a-zA-Z\s]+?),\s*({state_pattern})',
-        rf'([A-Z][a-zA-Z\s]+?)\s+({state_pattern})\s+(?:facility|plant|warehouse|center)',
+        # City, State with optional "in"
+        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
+        # City State (no comma)
+        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?)\s+({state_pattern})\b',
+        # With facility/plant/etc
+        rf'(?:in\s+)?([A-Z][a-zA-Z\s]+?),?\s*({state_pattern})\s+(?:facility|plant|warehouse|center|location)',
     ]
     
     for pattern in patterns:
@@ -292,10 +390,18 @@ def extract_location(text):
         if match:
             city = match.group(1).strip()
             state = match.group(2).strip()
+            
+            # Clean up city name - remove extra words
+            city = re.sub(r'\b(?:in|at|to|near|the)\b', '', city, flags=re.IGNORECASE).strip()
+            city = re.sub(r'\s+', ' ', city)  # Normalize spaces
+            
             # Normalize state to full name
             if state.upper() in states:
                 state = states[state.upper()]
-            return f"{city}, {state}"
+            
+            # Validate city name
+            if city and len(city) > 2:
+                return f"{city}, {state}"
     
     return ""
 
