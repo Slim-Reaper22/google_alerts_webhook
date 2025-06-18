@@ -439,24 +439,29 @@ def extract_job_numbers(text):
     return ""
 
 def generate_ai_summary(content, headline):
-    """Generate AI summary using Claude"""
+    """Generate AI summary using Claude - paragraph format"""
     if not anthropic_client:
         return create_manual_summary(headline, "", "", content)
     
     try:
-        prompt = f"""Based on this article about light industrial expansion, provide a brief 2-3 sentence summary focusing on:
+        prompt = f"""Based on this article about light industrial expansion, write a comprehensive 3-4 sentence paragraph summary that includes:
 1. What company is expanding or opening
 2. What type of facility/operation it is
-3. Key details like location, size, timeline, or investment
+3. Where it's located (city and state)
+4. Investment amount (if mentioned)
+5. Number of jobs being created (if mentioned)
+6. Timeline or completion date (if mentioned)
+
+Write it as a flowing paragraph, not bullet points. Make it informative and professional.
 
 Article headline: {headline}
 Article content: {content[:2000]}
 
-Summary:"""
+Summary paragraph:"""
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=150,
+            max_tokens=200,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -468,26 +473,85 @@ Summary:"""
         return create_manual_summary(headline, "", "", content)
 
 def create_manual_summary(headline, company, location, content):
-    """Create a summary without AI"""
-    summary_parts = []
-    
+    """Create a comprehensive summary without AI - paragraph format"""
+    # Start with company if available
     if company:
-        summary_parts.append(f"{company}")
+        summary = f"{company} "
+    else:
+        summary = "A company "
     
-    if location:
-        summary_parts.append(f"in {location}")
+    # Add action from headline
+    if "expands" in headline.lower():
+        summary += "is expanding its operations "
+    elif "announces" in headline.lower():
+        summary += "has announced plans for "
+    elif "opens" in headline.lower():
+        summary += "is opening "
+    elif "invests" in headline.lower():
+        summary += "is investing in "
+    else:
+        summary += "has plans for "
     
-    # Extract facility type from content
-    facility_keywords = ['warehouse', 'distribution center', 'manufacturing', 'facility', 'plant', 'logistics']
-    for keyword in facility_keywords:
-        if keyword in content.lower():
-            summary_parts.append(f"{keyword}")
+    # Add facility type if found
+    facility_keywords = {
+        'warehouse': 'a new warehouse facility',
+        'distribution center': 'a distribution center',
+        'manufacturing': 'manufacturing operations',
+        'facility': 'a new facility',
+        'plant': 'a new plant',
+        'logistics': 'logistics operations',
+        'operations': 'expanded operations'
+    }
+    
+    facility_found = False
+    for keyword, description in facility_keywords.items():
+        if keyword in headline.lower() or (content and keyword in content.lower()):
+            summary += description + " "
+            facility_found = True
             break
     
-    if summary_parts:
-        return f"{' '.join(summary_parts[:3])}. {headline}"
+    if not facility_found:
+        summary += "new operations "
+    
+    # Add location
+    if location:
+        summary += f"in {location}. "
     else:
-        return headline[:200]
+        summary += "at a new location. "
+    
+    # Add investment amount if found
+    investment_match = re.search(r'\$(\d+(?:,\d+)*(?:\.\d+)?)\s*(million|billion)?', headline, re.IGNORECASE)
+    if investment_match:
+        amount = investment_match.group(0)
+        summary += f"The expansion represents an investment of {amount}. "
+    
+    # Add any job numbers found
+    job_match = re.search(r'(\d+(?:,\d+)*)\s*(?:new\s+)?(?:jobs?|positions?|employees?)', headline, re.IGNORECASE)
+    if job_match:
+        jobs = job_match.group(1)
+        summary += f"The project is expected to create {jobs} new jobs. "
+    
+    # Add timing if found
+    if "2025" in headline or "2026" in headline:
+        year_match = re.search(r'(202\d)', headline)
+        if year_match:
+            summary += f"The project is scheduled for {year_match.group(1)}. "
+    
+    # Ensure we have a substantial summary
+    if len(summary) < 100:
+        # Add more context from the headline
+        summary += "This development represents continued growth in the region's industrial sector. "
+        
+    # Add a closing sentence if still short
+    if len(summary) < 150:
+        if "manufacturing" in headline.lower():
+            summary += "The expansion strengthens the area's manufacturing base. "
+        elif "distribution" in headline.lower() or "warehouse" in headline.lower():
+            summary += "This facility will enhance regional distribution capabilities. "
+        else:
+            summary += "The project demonstrates ongoing investment in light industrial infrastructure. "
+    
+    return summary.strip()
 
 def send_to_smartsuite(alert_data):
     """Send record to SmartSuite"""
