@@ -1,5 +1,5 @@
 # app.py - Flask webhook to receive Google Alerts from Zapier
-# This script can fetch article content and use AI summaries
+# Enhanced version with better article fetching and AI extraction
 
 from flask import Flask, request, jsonify
 import os
@@ -66,45 +66,40 @@ def process_google_alert():
             # Fetch article content if URL exists
             if alert['url']:
                 print(f"Fetching article content from: {alert['url']}")
-                article_data = fetch_article_content(alert['url'])
+                article_data = fetch_article_content_enhanced(alert['url'])
                 
                 print(f"Article fetch success: {article_data['success']}")
                 print(f"Content length: {len(article_data['content'])}")
                 
-                if article_data['content']:
-                    # Extract information from article
-                    full_text = f"{alert['headline']} {article_data['content']}"
+                if article_data['content'] and anthropic_client:
+                    # Use AI to extract ALL information at once
+                    print("Using AI to extract information...")
+                    extracted_info = extract_all_info_with_ai(
+                        article_data['content'], 
+                        alert['headline']
+                    )
                     
-                    alert['company'] = extract_company_name(full_text)
-                    alert['address'] = extract_location(full_text)
-                    alert['estimated_jobs'] = extract_job_numbers(full_text)
+                    alert['company'] = extracted_info['company']
+                    alert['address'] = extracted_info['address']
+                    alert['estimated_jobs'] = extracted_info['jobs']
+                    alert['lead_summary'] = extracted_info['summary']
                     
-                    print(f"Extracted company: {alert['company']}")
-                    print(f"Extracted address: {alert['address']}")
-                    print(f"Extracted jobs: {alert['estimated_jobs']}")
-                    
-                    # Generate AI summary if available
-                    if anthropic_client:
-                        print("Generating AI summary...")
-                        alert['lead_summary'] = generate_ai_summary(
-                            article_data['content'], 
-                            alert['headline']
-                        )
-                    else:
-                        print("No Anthropic client - creating manual summary")
-                        # Create manual summary
-                        alert['lead_summary'] = create_manual_summary(
-                            alert['headline'],
-                            alert['company'],
-                            alert['address'],
-                            article_data['content']
-                        )
+                    print(f"AI Extracted:")
+                    print(f"  Company: {alert['company']}")
+                    print(f"  Address: {alert['address']}")
+                    print(f"  Jobs: {alert['estimated_jobs']}")
                 else:
-                    print("No article content - using headline as summary")
-                    alert['lead_summary'] = alert['headline']
-                    # Try to extract from just headline
+                    # Fallback to pattern matching
+                    print("No article content or AI - using pattern matching")
                     alert['company'] = extract_company_name(alert['headline'])
-                    alert['address'] = extract_location(alert['headline'])
+                    alert['address'] = extract_location_from_headline(alert['headline'])
+                    alert['estimated_jobs'] = extract_job_numbers(alert['headline'])
+                    alert['lead_summary'] = create_detailed_summary(
+                        alert['headline'],
+                        alert['company'],
+                        alert['address'],
+                        ""
+                    )
             else:
                 print("No URL provided")
                 alert['lead_summary'] = alert['headline']
@@ -151,11 +146,9 @@ def parse_google_alert_email(html_content, subject):
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Debug: Save HTML for inspection
         print("Parsing Google Alert email...")
         
         # Find all table rows that contain alerts
-        # Google Alerts often uses tables
         for table in soup.find_all('table'):
             for row in table.find_all('tr'):
                 # Look for links in the row
@@ -174,7 +167,6 @@ def parse_google_alert_email(html_content, subject):
                 
                 if actual_url:
                     # Get the full text content from the link
-                    # This handles cases where text might be in nested elements
                     headline_parts = []
                     for text in link.stripped_strings:
                         headline_parts.append(text)
@@ -182,10 +174,8 @@ def parse_google_alert_email(html_content, subject):
                     # Join with spaces and clean up
                     headline_text = ' '.join(headline_parts)
                     
-                    # Additional cleanup - ensure spaces between words
-                    headline_text = re.sub(r'([a-z])([A-Z])', r'\1 \2', headline_text)  # Add space between camelCase
-                    headline_text = re.sub(r'(\w)([A-Z][a-z])', r'\1 \2', headline_text)  # Add space before capital letters
-                    headline_text = re.sub(r'\s+', ' ', headline_text)  # Normalize multiple spaces
+                    # Add spaces between camelCase and fix spacing
+                    headline_text = fix_text_spacing(headline_text)
                     
                     alert = {
                         'headline': headline_text.strip(),
@@ -197,20 +187,11 @@ def parse_google_alert_email(html_content, subject):
                         'estimated_jobs': ''
                     }
                     
-                    # Try to find source - look in the same row
-                    # Google often puts source in green text
+                    # Try to find source
                     for elem in row.find_all(['font', 'span']):
                         if elem.get('color') == '#006621' or (elem.get('style') and '006621' in elem.get('style', '')):
                             alert['source'] = elem.get_text(strip=True)
                             break
-                    
-                    # Also check next row for source
-                    if not alert['source']:
-                        next_row = row.find_next_sibling('tr')
-                        if next_row:
-                            source_elem = next_row.find('font', color='#006621')
-                            if source_elem:
-                                alert['source'] = source_elem.get_text(strip=True)
                     
                     # Only add if we have a meaningful headline
                     if alert['headline'] and len(alert['headline']) > 10:
@@ -225,25 +206,18 @@ def parse_google_alert_email(html_content, subject):
             for link in all_links:
                 href = link.get('href', '')
                 
-                # Skip Google's own links
                 if any(skip in href for skip in ['google.com/alerts', 'mailto:', '#']):
                     continue
                 
-                # Extract actual URL from Google redirect
                 actual_url = extract_google_url(href)
                 
                 if actual_url:
-                    # Get text with proper spacing
                     headline_parts = []
                     for text in link.stripped_strings:
                         headline_parts.append(text)
                     
                     headline_text = ' '.join(headline_parts)
-                    
-                    # Add spaces between camelCase
-                    headline_text = re.sub(r'([a-z])([A-Z])', r'\1 \2', headline_text)
-                    headline_text = re.sub(r'(\w)([A-Z][a-z])', r'\1 \2', headline_text)
-                    headline_text = re.sub(r'\s+', ' ', headline_text)
+                    headline_text = fix_text_spacing(headline_text)
                     
                     alert = {
                         'headline': headline_text.strip(),
@@ -255,7 +229,6 @@ def parse_google_alert_email(html_content, subject):
                         'estimated_jobs': ''
                     }
                     
-                    # Only add if we have a headline
                     if alert['headline'] and len(alert['headline']) > 10:
                         alerts.append(alert)
         
@@ -265,7 +238,23 @@ def parse_google_alert_email(html_content, subject):
         traceback.print_exc()
     
     print(f"Total alerts found: {len(alerts)}")
-    return alerts[:10]  # Limit to 10 alerts to avoid timeout
+    return alerts[:10]  # Limit to 10 alerts
+
+def fix_text_spacing(text):
+    """Fix spacing issues in text"""
+    # Add space between lowercase and uppercase
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    # Add space between letter and uppercase letter
+    text = re.sub(r'([a-zA-Z])([A-Z][a-z])', r'\1 \2', text)
+    # Fix common patterns
+    text = re.sub(r'Company([A-Z])', r'Company \1', text)
+    text = re.sub(r'Expands([A-Z])', r'Expands \1', text)
+    text = re.sub(r'Announces([A-Z])', r'Announces \1', text)
+    text = re.sub(r'Million([A-Z])', r'Million \1', text)
+    text = re.sub(r'Manufacturing([A-Z])', r'Manufacturing \1', text)
+    # Normalize spaces
+    text = re.sub(r'\s+', ' ', text)
+    return text
 
 def extract_google_url(url):
     """Extract actual URL from Google's redirect URL"""
@@ -277,8 +266,8 @@ def extract_google_url(url):
         return url
     return None
 
-def fetch_article_content(url):
-    """Fetch and parse article content"""
+def fetch_article_content_enhanced(url):
+    """Enhanced article fetching with multiple strategies"""
     article_data = {
         'content': '',
         'title': '',
@@ -286,92 +275,182 @@ def fetch_article_content(url):
     }
     
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # Extract title
-        title_elem = soup.find('title')
-        if title_elem:
-            article_data['title'] = title_elem.get_text(strip=True)
-        
-        # Remove script and style elements
-        for elem in soup(['script', 'style']):
-            elem.decompose()
-        
-        # Try to find main content
-        content_selectors = [
-            'article',
-            '[class*="content"]',
-            '[class*="article"]',
-            'main',
-            '[role="main"]'
+        # Try different user agents
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         ]
         
-        content = None
-        for selector in content_selectors:
-            elem = soup.select_one(selector)
-            if elem:
-                paragraphs = elem.find_all('p')
-                if len(paragraphs) >= 2:
-                    content = ' '.join([p.get_text(strip=True) for p in paragraphs])
+        for user_agent in user_agents:
+            headers = {
+                'User-Agent': user_agent,
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Extract title
+                title_elem = soup.find('title')
+                if title_elem:
+                    article_data['title'] = title_elem.get_text(strip=True)
+                
+                # Remove script and style elements
+                for elem in soup(['script', 'style', 'noscript']):
+                    elem.decompose()
+                
+                # Try multiple content extraction strategies
+                content = ""
+                
+                # Strategy 1: Look for article tags
+                article_elem = soup.find('article')
+                if article_elem:
+                    paragraphs = article_elem.find_all(['p', 'div'])
+                    content = ' '.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
+                
+                # Strategy 2: Look for main content divs
+                if not content:
+                    for selector in ['[class*="content"]', '[class*="article"]', '[id*="content"]', '[id*="article"]', 'main']:
+                        elem = soup.select_one(selector)
+                        if elem:
+                            paragraphs = elem.find_all(['p', 'div'])
+                            content = ' '.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
+                            if content:
+                                break
+                
+                # Strategy 3: Get all paragraphs
+                if not content:
+                    all_p = soup.find_all('p')
+                    if len(all_p) > 3:
+                        content = ' '.join([p.get_text(strip=True) for p in all_p if len(p.get_text(strip=True)) > 50])
+                
+                # Strategy 4: Get all text
+                if not content:
+                    content = soup.get_text()
+                    # Clean up the text
+                    content = re.sub(r'\n+', ' ', content)
+                    content = re.sub(r'\s+', ' ', content)
+                
+                if content and len(content) > 100:
+                    article_data['content'] = content[:5000]  # Limit length
+                    article_data['success'] = True
                     break
-        
-        # Fallback: get all paragraphs
-        if not content:
-            all_p = soup.find_all('p')
-            if all_p:
-                content = ' '.join([p.get_text(strip=True) for p in all_p[:15]])
-        
-        article_data['content'] = content[:3000] if content else ''  # Limit length
-        article_data['success'] = bool(content)
-        
+            
+            elif response.status_code == 403:
+                print(f"Access forbidden (403) for {url}")
+                # Try with a delay
+                time.sleep(2)
+            
     except Exception as e:
         print(f"Error fetching article from {url}: {e}")
     
     return article_data
 
+def extract_all_info_with_ai(content, headline):
+    """Use AI to extract all information at once"""
+    if not anthropic_client:
+        return {
+            'company': extract_company_name(headline),
+            'address': extract_location_from_headline(headline),
+            'jobs': extract_job_numbers(headline),
+            'summary': create_detailed_summary(headline, "", "", content)
+        }
+    
+    try:
+        prompt = f"""Analyze this article about industrial expansion and extract the following information:
+
+1. COMPANY NAME: Extract the exact company name (just the company, no description)
+2. ADDRESS/LOCATION: Extract the complete address if available, or at minimum the city and state. If a full street address is mentioned, include it.
+3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
+4. SUMMARY: Write a comprehensive 3-4 sentence paragraph summary that flows naturally
+
+Article headline: {headline}
+Article content: {content[:3000]}
+
+Respond in this exact JSON format:
+{{
+    "company": "Company Name",
+    "address": "Full address or City, State",
+    "jobs": "Number or empty string",
+    "summary": "Full paragraph summary"
+}}"""
+
+        response = anthropic_client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=300,
+            temperature=0.1,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        # Parse the JSON response
+        response_text = response.content[0].text.strip()
+        
+        # Extract JSON from response (in case there's extra text)
+        json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
+        if json_match:
+            response_text = json_match.group(0)
+        
+        extracted = json.loads(response_text)
+        
+        return {
+            'company': extracted.get('company', ''),
+            'address': extracted.get('address', ''),
+            'jobs': extracted.get('jobs', ''),
+            'summary': extracted.get('summary', headline)
+        }
+        
+    except Exception as e:
+        print(f"AI extraction error: {e}")
+        # Fallback to pattern matching
+        return {
+            'company': extract_company_name(headline),
+            'address': extract_location_from_headline(headline),
+            'jobs': extract_job_numbers(headline),
+            'summary': create_detailed_summary(headline, "", "", content)
+        }
+
 def extract_company_name(text):
     """Extract company name using various patterns"""
-    # Clean up the text first
-    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+    # Fix spacing first
+    text = fix_text_spacing(text)
     
     patterns = [
-        # Company with suffix - more specific
+        # Company with suffix
         r'([A-Z][A-Za-z0-9\s&\-\.\']+?)\s*(?:Inc\.?|LLC|Corp\.?|Corporation|Company|Co\.?|Ltd\.?|Limited|Group|Holdings|Industries|Manufacturing|Logistics|Properties|Partners|Enterprises|Systems|Technologies|Solutions)\b',
-        # Company doing action - capture company name before action verb
-        r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:announced|announces|plans|planning|expands|expanding|opens|opening|launches|launching|develops|developing|acquires|acquiring|invests|investing|to\s+build|will\s+build)',
-        # Company at start of headline
-        r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:Announces|Expands|Opens|Invests|Develops)',
-        # Quoted company
+        # Company before action verb
+        r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:Announces|Expands|Opens|Plans|Invests|Develops|Acquires|to Build|Will Build)',
+        # Company in quotes
         r'["\']([A-Z][A-Za-z0-9\s&\-\.\']+?)["\']',
     ]
     
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        match = re.search(pattern, text, re.IGNORECASE)
         if match:
             company = match.group(1).strip()
-            # Clean up company name
-            company = re.sub(r'\s+', ' ', company)  # Normalize spaces
-            company = company.rstrip('.')  # Remove trailing periods
-            
-            # Don't return if it's too short or too long
+            # Clean up
+            company = re.sub(r'\s+', ' ', company)
             if 3 < len(company) < 50:
                 return company
     
     return ""
 
-def extract_location(text):
-    """Extract city and state location"""
-    # Clean up the text first
-    text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+def extract_location_from_headline(text):
+    """Extract ONLY location from headline - no company names"""
+    # Fix spacing first
+    text = fix_text_spacing(text)
     
-    # US States mapping
+    # Remove company names and common words first
+    text = re.sub(r'([A-Z][A-Za-z0-9\s&\-\.\']+?)\s*(?:Inc\.?|LLC|Corp\.?|Corporation|Company|Co\.?|Ltd\.?)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:Announces|Expands|Opens|Plans|Million|Manufacturing|Expansion|Operations|Facility)\b', '', text, flags=re.IGNORECASE)
+    
+    # US States
     states = {
         'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
         'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
@@ -388,37 +467,19 @@ def extract_location(text):
         'WI': 'Wisconsin', 'WY': 'Wyoming'
     }
     
-    # Build pattern with all states
-    all_states = list(states.keys()) + list(states.values())
-    state_pattern = '|'.join(re.escape(state) for state in all_states)
-    
-    # Location patterns - more specific
-    patterns = [
-        # City, State (with comma)
-        rf'([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
-        # "in City, State"
-        rf'\bin\s+([A-Z][a-zA-Z\s]+?),\s*({state_pattern})\b',
-        # City State (no comma)
-        rf'([A-Z][a-zA-Z\s]+?)\s+({state_pattern})(?:\s+|,|$)',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            city = match.group(1).strip()
-            state = match.group(2).strip()
-            
-            # Clean up city name - remove common words
-            city = re.sub(r'\b(?:Company|Expands|Announces|Million|Manufacturing|Expansion|Opens|Develops)\b', '', city, flags=re.IGNORECASE)
-            city = re.sub(r'\s+', ' ', city).strip()
-            
-            # Normalize state to full name
-            if state.upper() in states:
-                state = states[state.upper()]
-            
-            # Validate city name
-            if city and len(city) > 2 and not city.replace(' ', '').isdigit():
-                return f"{city}, {state}"
+    # Look for state and work backwards
+    for state_abbr, state_full in states.items():
+        # Try both abbreviation and full name
+        for state_form in [state_abbr, state_full]:
+            pattern = rf'([A-Z][a-zA-Z\s]+?),?\s*{re.escape(state_form)}\b'
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                city = match.group(1).strip()
+                # Clean city name
+                city = re.sub(r'\b\d+\b', '', city)  # Remove numbers
+                city = re.sub(r'\s+', ' ', city).strip()
+                if city and len(city) > 2:
+                    return f"{city}, {state_full}"
     
     return ""
 
@@ -438,118 +499,86 @@ def extract_job_numbers(text):
     
     return ""
 
-def generate_ai_summary(content, headline):
-    """Generate AI summary using Claude - paragraph format"""
-    if not anthropic_client:
-        return create_manual_summary(headline, "", "", content)
+def create_detailed_summary(headline, company, location, content):
+    """Create a detailed paragraph summary"""
+    # Fix spacing in headline first
+    headline = fix_text_spacing(headline)
     
-    try:
-        prompt = f"""Based on this article about light industrial expansion, write a comprehensive 3-4 sentence paragraph summary that includes:
-1. What company is expanding or opening
-2. What type of facility/operation it is
-3. Where it's located (city and state)
-4. Investment amount (if mentioned)
-5. Number of jobs being created (if mentioned)
-6. Timeline or completion date (if mentioned)
-
-Write it as a flowing paragraph, not bullet points. Make it informative and professional.
-
-Article headline: {headline}
-Article content: {content[:2000]}
-
-Summary paragraph:"""
-
-        response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=200,
-            temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        return response.content[0].text.strip()
-        
-    except Exception as e:
-        print(f"AI summary error: {e}")
-        return create_manual_summary(headline, "", "", content)
-
-def create_manual_summary(headline, company, location, content):
-    """Create a comprehensive summary without AI - paragraph format"""
-    # Start with company if available
+    # Start building the summary
+    summary = ""
+    
+    # Company part
     if company:
         summary = f"{company} "
     else:
-        summary = "A company "
+        # Try to extract from headline
+        company_match = re.search(r'^([A-Z][A-Za-z0-9\s&\-\.\']+?)\s+(?:Announces|Expands|Opens)', headline, re.IGNORECASE)
+        if company_match:
+            summary = f"{company_match.group(1).strip()} "
+        else:
+            summary = "A company "
     
-    # Add action from headline
+    # Action part
     if "expands" in headline.lower():
         summary += "is expanding its operations "
-    elif "announces" in headline.lower():
-        summary += "has announced plans for "
+    elif "announces" in headline.lower() and "expansion" in headline.lower():
+        summary += "has announced plans for a major expansion "
     elif "opens" in headline.lower():
-        summary += "is opening "
+        summary += "is opening a new facility "
     elif "invests" in headline.lower():
-        summary += "is investing in "
+        summary += "is making a significant investment "
+    elif "develops" in headline.lower():
+        summary += "is developing new facilities "
     else:
-        summary += "has plans for "
+        summary += "has announced new industrial development "
     
-    # Add facility type if found
-    facility_keywords = {
-        'warehouse': 'a new warehouse facility',
-        'distribution center': 'a distribution center',
-        'manufacturing': 'manufacturing operations',
-        'facility': 'a new facility',
-        'plant': 'a new plant',
-        'logistics': 'logistics operations',
-        'operations': 'expanded operations'
-    }
+    # Facility type
+    if "warehouse" in headline.lower():
+        summary += "with a new warehouse facility "
+    elif "distribution" in headline.lower():
+        summary += "with a distribution center "
+    elif "manufacturing" in headline.lower():
+        summary += "with manufacturing operations "
+    elif "logistics" in headline.lower():
+        summary += "with logistics facilities "
+    else:
+        summary += ""
     
-    facility_found = False
-    for keyword, description in facility_keywords.items():
-        if keyword in headline.lower() or (content and keyword in content.lower()):
-            summary += description + " "
-            facility_found = True
-            break
-    
-    if not facility_found:
-        summary += "new operations "
-    
-    # Add location
+    # Location
     if location:
         summary += f"in {location}. "
     else:
-        summary += "at a new location. "
+        # Try to extract from headline
+        loc = extract_location_from_headline(headline)
+        if loc:
+            summary += f"in {loc}. "
+        else:
+            summary += "at a new location. "
     
-    # Add investment amount if found
+    # Investment amount
     investment_match = re.search(r'\$(\d+(?:,\d+)*(?:\.\d+)?)\s*(million|billion)?', headline, re.IGNORECASE)
     if investment_match:
         amount = investment_match.group(0)
-        summary += f"The expansion represents an investment of {amount}. "
+        summary += f"The project represents an investment of {amount}. "
     
-    # Add any job numbers found
-    job_match = re.search(r'(\d+(?:,\d+)*)\s*(?:new\s+)?(?:jobs?|positions?|employees?)', headline, re.IGNORECASE)
+    # Jobs
+    job_match = re.search(r'(\d+(?:,\d+)*)\s*(?:new\s+)?(?:jobs?|positions?)', headline, re.IGNORECASE)
     if job_match:
-        jobs = job_match.group(1)
-        summary += f"The project is expected to create {jobs} new jobs. "
+        jobs = job_match.group(0)
+        summary += f"The expansion is expected to create {jobs}. "
     
-    # Add timing if found
-    if "2025" in headline or "2026" in headline:
-        year_match = re.search(r'(202\d)', headline)
-        if year_match:
-            summary += f"The project is scheduled for {year_match.group(1)}. "
-    
-    # Ensure we have a substantial summary
-    if len(summary) < 100:
-        # Add more context from the headline
-        summary += "This development represents continued growth in the region's industrial sector. "
-        
-    # Add a closing sentence if still short
+    # Add context if still short
     if len(summary) < 150:
         if "manufacturing" in headline.lower():
-            summary += "The expansion strengthens the area's manufacturing base. "
+            summary += "This expansion strengthens the region's manufacturing sector and contributes to local economic growth. "
         elif "distribution" in headline.lower() or "warehouse" in headline.lower():
-            summary += "This facility will enhance regional distribution capabilities. "
+            summary += "The new facility will enhance distribution capabilities and support growing logistics demands in the region. "
         else:
-            summary += "The project demonstrates ongoing investment in light industrial infrastructure. "
+            summary += "This development represents continued investment in light industrial infrastructure and local job creation. "
+    
+    # Ensure minimum length
+    if len(summary) < 200:
+        summary += "The project demonstrates the ongoing growth of industrial operations in the area. "
     
     return summary.strip()
 
@@ -569,10 +598,9 @@ def send_to_smartsuite(alert_data):
             "Content-Type": "application/json"
         }
         
-        # Format date - SmartSuite expects ISO format string for date fields
+        # Format date
         try:
             if 'date' in alert_data and alert_data['date']:
-                # Parse the date and convert to ISO format
                 from dateutil import parser
                 date_obj = parser.parse(alert_data['date'])
                 formatted_date = date_obj.isoformat()
@@ -581,39 +609,27 @@ def send_to_smartsuite(alert_data):
         except:
             formatted_date = datetime.now().isoformat()
         
-        # Create unique title by adding timestamp
+        # Create unique title
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base_title = (alert_data.get('company') or alert_data.get('headline', 'New Lead'))[:80]
         unique_title = f"{base_title} - {timestamp}"
         
-        # For address field, only send if it's a proper city, state format
-        address_value = ""
-        if alert_data.get('address') and ',' in alert_data.get('address', ''):
-            # Check if it looks like a valid address
-            parts = alert_data['address'].split(',')
-            if len(parts) == 2 and len(parts[0].strip()) > 2:
-                address_value = alert_data['address']
-        
-        # Build payload with CORRECT FIELD IDs and formats
+        # Build payload
         payload = {
-            "title": unique_title,  # Made unique with timestamp
+            "title": unique_title,
             "sc373e6626": alert_data.get('company', ''),  # company
-            "s492934214": alert_data.get('lead_summary', '')[:500],  # lead_summary
+            "s46434c9b6": alert_data.get('address', ''),  # address - as text field
+            "s492934214": alert_data.get('lead_summary', '')[:1000],  # lead_summary - longer
             "sa8ca8dbcb": alert_data.get('estimated_jobs', ''),  # estimated_new_jobs
-            "s8e6e9fe79": alert_data.get('url', ''),  # article_url - just the URL string
-            "s8d5616e3e": formatted_date,  # date - just the ISO date string
+            "s8e6e9fe79": alert_data.get('url', ''),  # article_url
+            "s8d5616e3e": formatted_date,  # date
             "s6e74e1ce5": alert_data.get('source', '')[:100]  # source
         }
-        
-        # Only add address if it's valid
-        if address_value:
-            payload["s46434c9b6"] = address_value
         
         # Clean payload - remove empty values
         payload = {k: v for k, v in payload.items() if v and v != ''}
         
         print(f"Sending to SmartSuite: {unique_title}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
         
         response = requests.post(url, headers=headers, json=payload)
         
@@ -622,18 +638,6 @@ def send_to_smartsuite(alert_data):
         else:
             error_msg = f"SmartSuite error {response.status_code}: {response.text[:200]}"
             print(error_msg)
-            
-            # If it's a duplicate title error, add more specific timestamp
-            if "This field must be unique" in response.text and "title" in response.text:
-                # Try again with milliseconds
-                import time
-                unique_title = f"{base_title} - {int(time.time()*1000)}"
-                payload['title'] = unique_title
-                
-                response = requests.post(url, headers=headers, json=payload)
-                if response.status_code in [200, 201]:
-                    return True, "Successfully sent to SmartSuite (with unique timestamp)"
-                
             return False, error_msg
             
     except Exception as e:
