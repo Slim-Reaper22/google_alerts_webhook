@@ -369,8 +369,17 @@ def extract_all_info_with_ai(content, headline):
 1. COMPANY NAME: Extract the exact company name (just the company, no description)
 2. ADDRESS/LOCATION: Extract the complete address if available, or at minimum the city and state. If a full street address is mentioned, include it.
 3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
-4. SUMMARY: Write a comprehensive paragraph summary about the article that focuses more on the facilty. ex. sq footage, purpose of the facility, etc...
-
+4. SUMMARY: Write a detailed 5-7 sentence paragraph summary that focuses specifically on the facility itself. Include:
+   - Square footage or size of the facility (if mentioned)
+   - Purpose and primary use of the facility (warehouse, distribution, manufacturing, etc.)
+   - What products or services will be handled/produced there
+   - Any special features or equipment mentioned
+   - Construction timeline or opening date
+   - Investment amount if mentioned
+   - Any technology or automation features
+   
+   Focus on concrete facility details, NOT on economic impact or community benefits. Be specific about what the facility will do and how it will operate.
+   
 Article headline: {headline}
 Article content: {content[:3000]}
 
@@ -384,7 +393,7 @@ Respond in this exact JSON format:
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=300,
+            max_tokens=400,
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
