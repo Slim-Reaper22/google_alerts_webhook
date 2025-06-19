@@ -369,7 +369,7 @@ def extract_all_info_with_ai(content, headline):
 1. COMPANY NAME: Extract the exact company name (just the company, no description)
 2. ADDRESS/LOCATION: Extract the complete address if available, or at minimum the city and state. If a full street address is mentioned, include it.
 3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
-4. SUMMARY: Write a comprehensive 3-4 sentence paragraph summary that flows naturally
+4. SUMMARY: Write a comprehensive paragraph summary about the article that focuses more on the facilty. ex. sq footage, purpose of the facility, etc...
 
 Article headline: {headline}
 Article content: {content[:3000]}
