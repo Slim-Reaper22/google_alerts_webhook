@@ -364,36 +364,49 @@ def extract_all_info_with_ai(content, headline):
         }
     
     try:
-        prompt = f"""Analyze this article about industrial expansion and extract the following information:
+        # If we have no content, be explicit about it
+        if not content or len(content) < 100:
+            content = "ARTICLE CONTENT NOT AVAILABLE - The website blocked access. Please create a summary based on the headline and common patterns for industrial facility announcements."
+        
+        prompt = f"""Analyze this article about industrial facility expansion and extract information. 
+
+IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about economic impact.
 
 1. COMPANY NAME: Extract the exact company name (just the company, no description)
+
 2. ADDRESS/LOCATION: Extract the complete address if available, or at minimum the city and state. If a full street address is mentioned, include it.
+
 3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
-4. SUMMARY: Write a detailed 5-7 sentence paragraph summary that focuses specifically on the facility itself. Include:
-   - Square footage or size of the facility (if mentioned)
-   - Purpose and primary use of the facility (warehouse, distribution, manufacturing, etc.)
-   - What products or services will be handled/produced there
-   - Any special features or equipment mentioned
-   - Construction timeline or opening date
-   - Investment amount if mentioned
-   - Any technology or automation features
-   
-   Focus on concrete facility details, NOT on economic impact or community benefits. Be specific about what the facility will do and how it will operate.
-   
+
+4. SUMMARY: Write a detailed 6-8 sentence paragraph about THE FACILITY ITSELF. You MUST include specific details like:
+   - Exact square footage (e.g., "300,000-square-foot facility")
+   - Specific address if mentioned (e.g., "444 Charles Court")
+   - Primary purpose and operations (e.g., "production and packing operations for powdered stick packs")
+   - Equipment and technology (e.g., "state-of-the-art drink stick filling lines", "automated packaging systems")
+   - Investment amount in dollars (e.g., "$10 million investment")
+   - Production capacity if mentioned (e.g., "3 billion stick packs per year")
+   - Timeline and key dates (e.g., "ribbon-cutting ceremony on June 5, 2025")
+   - Building conversions or renovations if applicable
+   - Any special features (automation, warehouse specs, utilities)
+
+DO NOT write generic statements like "strengthens the region's manufacturing sector" or "contributes to economic growth". 
+BE SPECIFIC about square footage, equipment, capabilities, and facility features.
+If specific details aren't in the article, note what type of details would typically be included for this type of facility.
+
 Article headline: {headline}
-Article content: {content[:3000]}
+Article content: {content[:4000]}
 
 Respond in this exact JSON format:
 {{
     "company": "Company Name",
     "address": "Full address or City, State",
     "jobs": "Number or empty string",
-    "summary": "Full paragraph summary"
+    "summary": "Detailed facility-focused paragraph with specific square footage, equipment, and operational details"
 }}"""
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=400,
+            max_tokens=500,  # Increased for detailed summaries
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
