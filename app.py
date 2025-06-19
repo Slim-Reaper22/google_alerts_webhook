@@ -345,21 +345,53 @@ IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about econ
 
 1. COMPANY NAME: Extract the exact company name (just the company, no description)
 
-2. ADDRESS/LOCATION: Extract the complete address including:
-   - Street number and street name (e.g., "444 Charles Court")
-   - City and state
-   - Even if these elements are separated in the text, combine them into a full address
+2. ADDRESS/LOCATION: You MUST search the ENTIRE article for address components and combine them. 
+
+   STEP 1: Search for street address patterns ANYWHERE in the article:
+   - Look for: [number] + [street name] (e.g., "444 Charles Court")
+   - Common patterns: "123 Main Street", "456 Industrial Drive", "789 Commerce Blvd"
+   - Key phrases: "located at", "facility at", "address is", "site at", "property at"
    
-   Look for address patterns throughout the article such as:
-   - Numbers followed by street names (even if city/state appear elsewhere)
-   - Text mentioning "located at", "facility at", "address", "site at"
-   - Combine scattered address elements into format: "Street Address, City, State"
+   STEP 2: Find the city and state (may be in a different sentence):
+   - City is usually before state name
+   - State can be full name or abbreviation
    
-   For example, if the article mentions "444 Charles Court" in one place and "West Chicago, Illinois" in another, combine them as: "444 Charles Court, West Chicago, Illinois"
+   STEP 3: COMBINE all parts into one complete address:
+   - If you find "444 Charles Court" anywhere AND "West Chicago, Illinois" anywhere else
+   - Return: "444 Charles Court, West Chicago, Illinois"
    
-   If only city and state are mentioned, return just "City, State"
+   IMPORTANT:
+   - The street address and city/state are often in DIFFERENT sentences or paragraphs
+   - You must search the ENTIRE article text, not just near the company name
+   - If you find a street address ANYWHERE, include it
+   - Only return city/state alone if NO street address exists in the entire article
    
-3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
+   Example from article text:
+   "...investment will include the construction of a 300,000-square-foot facility, located at 444 Charles Court, that will focus on..."
+   Should extract: "444 Charles Court, West Chicago, Illinois"
+   
+3. ESTIMATED NEW JOBS: Extract the number of NEW jobs being created by this expansion/facility. 
+
+   Look for patterns like:
+   - "create [number] jobs"
+   - "create up to [number] jobs"
+   - "expected to create [number] jobs"
+   - "will add [number] jobs"
+   - "hiring [number] employees"
+   - "[number] new positions"
+   
+   Important: 
+   - Extract ONLY the number (e.g., "300" not "300 jobs")
+   - This should be NEW jobs from the expansion, NOT current employment
+   - If the article mentions current employees AND new jobs, only extract the new jobs number
+   - If no new job creation is mentioned, return "Not specified"
+   - If jobs are mentioned but the number is vague (e.g., "will create jobs"), return "Not specified"
+   
+   Examples:
+   - "expected to create up to 300 high-skill jobs" → "300"
+   - "currently employs 10 people... expected to create up to 300 jobs" → "300"
+   - "will create jobs in the area" → "Not specified"
+   - No mention of jobs → "Not specified"
 
 4. SUMMARY: Write a detailed 6-8 sentence paragraph about THE FACILITY ITSELF. You MUST include specific details like:
    - Exact square footage (e.g., "300,000-square-foot facility")
@@ -370,6 +402,7 @@ IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about econ
    - Production capacity if mentioned (e.g., "3 billion stick packs per year")
    - Timeline and key dates (e.g., "ribbon-cutting ceremony on June 5, 2025")
    - Building conversions or renovations if applicable
+   - Number of jobs to be created
    - Any special features (automation, warehouse specs, utilities)
 
 DO NOT write generic statements like "strengthens the region's manufacturing sector" or "contributes to economic growth". 
