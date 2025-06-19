@@ -406,7 +406,7 @@ Respond in this exact JSON format:
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=500,  # Increased for detailed summaries
+            max_tokens=700,  # Increased for detailed summaries
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
