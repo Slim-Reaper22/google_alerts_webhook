@@ -1,5 +1,5 @@
 # app.py - Flask webhook to receive Google Alerts from Zapier
-# Enhanced version with better article fetching and AI extraction
+# Uses Jina Reader for article content extraction and Claude AI for analysis
 
 from flask import Flask, request, jsonify
 import os
@@ -31,6 +31,7 @@ def home():
     <h1>Google Alerts to SmartSuite Webhook</h1>
     <p>Status: Running ✅</p>
     <p>Endpoint: POST /webhook</p>
+    <p>Using: Jina Reader + Claude AI</p>
     """
 
 @app.route('/webhook', methods=['POST'])
@@ -66,18 +67,19 @@ def process_google_alert():
             # Fetch article content if URL exists
             if alert['url']:
                 print(f"Fetching article content from: {alert['url']}")
-                article_data = fetch_article_content_enhanced(alert['url'])
+                article_data = fetch_article_with_jina(alert['url'])
                 
                 print(f"Article fetch success: {article_data['success']}")
                 print(f"Content length: {len(article_data['content'])}")
                 
-                if article_data['content'] and anthropic_client:
+                # Use AI regardless of whether we got content
+                if anthropic_client:
                     # Use AI to extract ALL information at once
                     print("Using AI to extract information...")
                     extracted_info = extract_all_info_with_ai(
-                        article_data['content'], 
+                        article_data['content'],
                         alert['headline'],
-                        alert['url']  # Pass the URL to AI
+                        alert['url']
                     )
                     
                     alert['company'] = extracted_info['company']
@@ -91,7 +93,7 @@ def process_google_alert():
                     print(f"  Jobs: {alert['estimated_jobs']}")
                 else:
                     # Fallback to pattern matching
-                    print("No article content or AI - using pattern matching")
+                    print("No Anthropic client - using pattern matching")
                     alert['company'] = extract_company_name(alert['headline'])
                     alert['address'] = extract_location_from_headline(alert['headline'])
                     alert['estimated_jobs'] = extract_job_numbers(alert['headline'])
@@ -99,11 +101,11 @@ def process_google_alert():
                         alert['headline'],
                         alert['company'],
                         alert['address'],
-                        ""
+                        article_data['content']
                     )
             else:
                 print("No URL provided")
-                alert['lead_summary'] = alert['headline']
+                alert['lead_summary'] = "No article URL provided"
             
             alert['date'] = email_date
             
@@ -267,8 +269,8 @@ def extract_google_url(url):
         return url
     return None
 
-def fetch_article_content_enhanced(url):
-    """Enhanced article fetching with multiple strategies"""
+def fetch_article_with_jina(url):
+    """Use Jina Reader API to fetch article content - FREE and no API key needed!"""
     article_data = {
         'content': '',
         'title': '',
@@ -276,81 +278,47 @@ def fetch_article_content_enhanced(url):
     }
     
     try:
-        # Try different user agents
-        user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        ]
+        # Jina Reader API - just prepend the URL
+        jina_url = f"https://r.jina.ai/{url}"
         
-        for user_agent in user_agents:
-            headers = {
-                'User-Agent': user_agent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
-            }
+        print(f"Using Jina Reader to fetch: {url}")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/plain'
+        }
+        
+        response = requests.get(jina_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            content = response.text
             
-            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            # Jina returns markdown, extract title if present
+            title_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+            if title_match:
+                article_data['title'] = title_match.group(1).strip()
             
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Extract title
-                title_elem = soup.find('title')
-                if title_elem:
-                    article_data['title'] = title_elem.get_text(strip=True)
-                
-                # Remove script and style elements
-                for elem in soup(['script', 'style', 'noscript']):
-                    elem.decompose()
-                
-                # Try multiple content extraction strategies
-                content = ""
-                
-                # Strategy 1: Look for article tags
-                article_elem = soup.find('article')
-                if article_elem:
-                    paragraphs = article_elem.find_all(['p', 'div'])
-                    content = ' '.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-                
-                # Strategy 2: Look for main content divs
-                if not content:
-                    for selector in ['[class*="content"]', '[class*="article"]', '[id*="content"]', '[id*="article"]', 'main']:
-                        elem = soup.select_one(selector)
-                        if elem:
-                            paragraphs = elem.find_all(['p', 'div'])
-                            content = ' '.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-                            if content:
-                                break
-                
-                # Strategy 3: Get all paragraphs
-                if not content:
-                    all_p = soup.find_all('p')
-                    if len(all_p) > 3:
-                        content = ' '.join([p.get_text(strip=True) for p in all_p if len(p.get_text(strip=True)) > 50])
-                
-                # Strategy 4: Get all text
-                if not content:
-                    content = soup.get_text()
-                    # Clean up the text
-                    content = re.sub(r'\n+', ' ', content)
-                    content = re.sub(r'\s+', ' ', content)
-                
-                if content and len(content) > 100:
-                    article_data['content'] = content[:5000]  # Limit length
-                    article_data['success'] = True
-                    break
+            # Clean up the content
+            # Remove markdown headers but keep the text
+            content = re.sub(r'^#+\s+', '', content, flags=re.MULTILINE)
+            # Remove excess whitespace
+            content = re.sub(r'\n{3,}', '\n\n', content)
             
-            elif response.status_code == 403:
-                print(f"Access forbidden (403) for {url}")
-                # Try with a delay
-                time.sleep(2)
+            if content and len(content) > 100:
+                article_data['content'] = content[:8000]  # Limit to 8000 chars
+                article_data['success'] = True
+                print(f"Jina Reader success! Got {len(content)} characters")
+            else:
+                print(f"Jina Reader couldn't extract meaningful content")
+                article_data['content'] = "Could not fetch article content - website may be blocking access."
+                
+        else:
+            print(f"Jina Reader error {response.status_code}")
+            article_data['content'] = f"Could not fetch article content - Jina Reader returned error {response.status_code}"
             
     except Exception as e:
-        print(f"Error fetching article from {url}: {e}")
+        print(f"Jina Reader exception: {e}")
+        article_data['content'] = f"Could not fetch article content - Error: {str(e)}"
     
     return article_data
 
@@ -365,9 +333,8 @@ def extract_all_info_with_ai(content, headline, url=""):
         }
     
     try:
-        # If we have no content, be explicit about it
-        if not content or len(content) < 100:
-            content = "ARTICLE CONTENT NOT AVAILABLE - The website blocked our access to the full article."
+        # Check if we have actual content
+        has_content = content and len(content) > 200 and "Could not fetch" not in content
         
         prompt = f"""Analyze this article about industrial facility expansion and extract information. 
 
@@ -396,9 +363,7 @@ IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about econ
 DO NOT write generic statements like "strengthens the region's manufacturing sector" or "contributes to economic growth". 
 BE SPECIFIC about square footage, equipment, capabilities, and facility features.
 
-If the article content is not available, mention that access was blocked but provide what details can be inferred from the headline and URL.
-
-Article content available:
+{"Article content:" if has_content else "NOTE: Article content could not be fetched. Please provide what information you can from the headline and URL."}
 {content[:4000]}
 
 Respond in this exact JSON format:
@@ -411,7 +376,7 @@ Respond in this exact JSON format:
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=500,  # Increased for detailed summaries
+            max_tokens=500,
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -425,6 +390,10 @@ Respond in this exact JSON format:
             response_text = json_match.group(0)
         
         extracted = json.loads(response_text)
+        
+        # Add note if content wasn't fetched
+        if not has_content:
+            extracted['summary'] = extracted.get('summary', '') + " [Note: Full article content could not be fetched]"
         
         return {
             'company': extracted.get('company', ''),
@@ -527,9 +496,13 @@ def extract_job_numbers(text):
     return ""
 
 def create_detailed_summary(headline, company, location, content):
-    """Create a detailed paragraph summary"""
+    """Create a detailed paragraph summary - fallback when AI isn't available"""
     # Fix spacing in headline first
     headline = fix_text_spacing(headline)
+    
+    # Check if we have actual content
+    if not content or "Could not fetch" in content:
+        return f"Unable to fetch full article content. Based on the headline: {headline}"
     
     # Start building the summary
     summary = ""
@@ -543,7 +516,7 @@ def create_detailed_summary(headline, company, location, content):
         if company_match:
             summary = f"{company_match.group(1).strip()} "
         else:
-            summary = "A company "
+            summary = "The company "
     
     # Action part
     if "expands" in headline.lower():
@@ -594,18 +567,8 @@ def create_detailed_summary(headline, company, location, content):
         jobs = job_match.group(0)
         summary += f"The expansion is expected to create {jobs}. "
     
-    # Add context if still short
-    if len(summary) < 150:
-        if "manufacturing" in headline.lower():
-            summary += "This expansion strengthens the region's manufacturing sector and contributes to local economic growth. "
-        elif "distribution" in headline.lower() or "warehouse" in headline.lower():
-            summary += "The new facility will enhance distribution capabilities and support growing logistics demands in the region. "
-        else:
-            summary += "This development represents continued investment in light industrial infrastructure and local job creation. "
-    
-    # Ensure minimum length
-    if len(summary) < 200:
-        summary += "The project demonstrates the ongoing growth of industrial operations in the area. "
+    # Add note about content
+    summary += "Additional facility details require access to the full article content."
     
     return summary.strip()
 
