@@ -345,8 +345,20 @@ IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about econ
 
 1. COMPANY NAME: Extract the exact company name (just the company, no description)
 
-2. ADDRESS/LOCATION: Extract the complete address if available, or at minimum the city and state. If a full street address is mentioned, include it.
-
+2. ADDRESS/LOCATION: Extract the complete address including:
+   - Street number and street name (e.g., "444 Charles Court")
+   - City and state
+   - Even if these elements are separated in the text, combine them into a full address
+   
+   Look for address patterns throughout the article such as:
+   - Numbers followed by street names (even if city/state appear elsewhere)
+   - Text mentioning "located at", "facility at", "address", "site at"
+   - Combine scattered address elements into format: "Street Address, City, State"
+   
+   For example, if the article mentions "444 Charles Court" in one place and "West Chicago, Illinois" in another, combine them as: "444 Charles Court, West Chicago, Illinois"
+   
+   If only city and state are mentioned, return just "City, State"
+   
 3. ESTIMATED NEW JOBS: Extract the number of new jobs if mentioned (just the number)
 
 4. SUMMARY: Write a detailed 6-8 sentence paragraph about THE FACILITY ITSELF. You MUST include specific details like:
