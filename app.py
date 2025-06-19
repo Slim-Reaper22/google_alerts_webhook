@@ -76,7 +76,8 @@ def process_google_alert():
                     print("Using AI to extract information...")
                     extracted_info = extract_all_info_with_ai(
                         article_data['content'], 
-                        alert['headline']
+                        alert['headline'],
+                        alert['url']  # Pass the URL to AI
                     )
                     
                     alert['company'] = extracted_info['company']
@@ -353,7 +354,7 @@ def fetch_article_content_enhanced(url):
     
     return article_data
 
-def extract_all_info_with_ai(content, headline):
+def extract_all_info_with_ai(content, headline, url=""):
     """Use AI to extract all information at once"""
     if not anthropic_client:
         return {
@@ -366,9 +367,12 @@ def extract_all_info_with_ai(content, headline):
     try:
         # If we have no content, be explicit about it
         if not content or len(content) < 100:
-            content = "ARTICLE CONTENT NOT AVAILABLE - The website blocked access. Please create a summary based on the headline and common patterns for industrial facility announcements."
+            content = "ARTICLE CONTENT NOT AVAILABLE - The website blocked our access to the full article."
         
         prompt = f"""Analyze this article about industrial facility expansion and extract information. 
+
+Article URL: {url}
+Article Headline: {headline}
 
 IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about economic impact.
 
@@ -391,10 +395,11 @@ IMPORTANT: Focus on SPECIFIC FACILITY DETAILS, not generic statements about econ
 
 DO NOT write generic statements like "strengthens the region's manufacturing sector" or "contributes to economic growth". 
 BE SPECIFIC about square footage, equipment, capabilities, and facility features.
-If specific details aren't in the article, note what type of details would typically be included for this type of facility.
 
-Article headline: {headline}
-Article content: {content[:4000]}
+If the article content is not available, mention that access was blocked but provide what details can be inferred from the headline and URL.
+
+Article content available:
+{content[:4000]}
 
 Respond in this exact JSON format:
 {{
@@ -406,7 +411,7 @@ Respond in this exact JSON format:
 
         response = anthropic_client.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=700,  # Increased for detailed summaries
+            max_tokens=500,  # Increased for detailed summaries
             temperature=0.1,
             messages=[{"role": "user", "content": prompt}]
         )
